@@ -417,7 +417,7 @@
 							sendBlur( x*x );  //★10
 							//trace("315: x*x = " + (x*x));
 							setBlur(myvideo, x*x );  //自分の映像もぼかす
-							writeLog(this.myname.text + "-onData", x, x*x);
+							writeLog(this.myname.text, x, x*x);
 						}
 						//音量調節
 						changeVolume();  //★15
@@ -519,20 +519,24 @@
 			}
 			//★13　おわり
 			
-			
+			private var prevAnotherCurtainGap:Number = -1;
 			//★14　はじまり
 			//　update clients when the shared object changes
 			private function syncHandler(event:SyncEvent):void {
 				// when a sync event is fired
 				// update the position of the ball in clients
+				// 自分のSharedObjectが更新された時も呼ばれる
 				
 				//trace(so.data[othername.text]);
 				try{
 					if(!isNaN(so.data[othername.text])){
 						anotherCurtainGap = parseFloat(so.data[othername.text]);
 						//trace("othername CartainGap: " + (anotherCurtainGap));
-						setBlur(video, anotherCurtainGap);
-						writeLog(this.othername.text + "-syncHandler", Math.sqrt(anotherCurtainGap), anotherCurtainGap);
+						if (prevAnotherCurtainGap != anotherCurtainGap) {
+							setBlur(video, anotherCurtainGap);
+							writeLog(this.othername.text, Math.sqrt(anotherCurtainGap), anotherCurtainGap);
+						}
+						prevAnotherCurtainGap = anotherCurtainGap;
 					}
 				} catch(error:Error){
 					trace("SyncEventでエラー");
