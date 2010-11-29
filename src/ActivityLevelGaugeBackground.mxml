@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Canvas xmlns:mx="http://www.adobe.com/2006/mxml" width="30" height="110" cornerRadius="4">
+	<mx:Button x="0" y="0" width="30" height="110" cornerRadius="4" fillAlphas="[1.0, 1.0, 1.0, 1.0]" alpha="1.0" themeColor="#FFFFFF"/>
+	
+</mx:Canvas>

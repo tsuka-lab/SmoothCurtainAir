@@ -1,0 +1,837 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx"
+					   xmlns:ns1="*"
+					   applicationComplete="init()"
+					   closing="onClosing()"
+					   showStatusBar="false"
+					   width="800"
+					   height="600"
+					   
+					   >
+	<fx:Declarations>
+		<!-- 非ビジュアルエレメント (サービス、値オブジェクトなど) をここに配置 -->
+	</fx:Declarations>
+	
+	<fx:Script>
+		<![CDATA[
+			import flash.display.MovieClip;
+			import flash.display.Sprite;
+			import flash.events.MouseEvent;
+			import flash.events.NetStatusEvent;
+			import flash.filters.*;
+			import flash.media.Microphone;
+			import flash.media.Video;
+			import flash.net.NetConnection;
+			import flash.net.NetStream;
+			import flash.net.Responder;
+			
+			import mx.controls.*;
+			
+			import org.osmf.display.ScaleMode;
+			
+			private var nc:NetConnection;
+			private var ns:NetStream;
+			private var camera:Camera;
+			private var mic:Microphone;
+			private var video:Video;
+			private var myvideo:Video;
+			private var stream:NetStream;
+			private var playStream:NetStream;
+			private var myResponder:Responder = new Responder(onReply);
+			private var so:SharedObject;	
+			private var socket:XMLSocket;
+			private var myleftValue:int = 0;
+			private var myrightValue:int = 0;
+			private var myShock:int = 0;
+			private var mypasttime:Date = new Date();   //カーテンが前回開いた時間(自分)
+			private var pasttime:Date = new Date();   //カーテンが前回開いた時間
+			private var anotherIRValue:Number = 0;  //相手の赤外線センサ値
+			private var anotherCurtainGap:Number = 0;
+			private var anotherVolume:Number = 0;
+			private var anotherShock:Number = 0;
+			private var myClosed:Boolean = false;
+			private var anotherClosed:Boolean = false;
+			private var logFileStream:FileStream;
+			
+			private const DEFAULT_HOST:String = "localhost";
+			private const DEFAULT_PORT:int = 4321;
+			
+			//●●init()●●　index.tempeate.htmlから値を受け取る
+			private function init():void{
+				stage.scaleMode = StageScaleMode.NO_BORDER;
+				this.initTextInput();
+				this.initLogFileStream();
+				
+				/*
+				servername.text=LoaderInfo(this.root.loaderInfo).parameters.server;
+				myname.text=LoaderInfo(this.root.loaderInfo).parameters.myname;
+				othername.text=LoaderInfo(this.root.loaderInfo).parameters.othername;
+				*/
+			}
+			
+			private function initLogFileStream():void {
+				var file:File = File.documentsDirectory.resolvePath("SmoothCurtainLog.txt");
+				this.logFileStream = new FileStream();
+				this.logFileStream.openAsync(file, FileMode.APPEND);
+				//this.logFileStream.writeUTFBytes("aaa\r\n");
+				//this.writeLog(this.myname.text, 0.2, 0.54);
+			}
+			
+			private function onClosing():void {
+				this.logFileStream.close();
+			}
+			
+			private function initTextInput():void {
+				var localSo:SharedObject = SharedObject.getLocal("smooth-curtain");
+				if (localSo.data.myname) {
+					myname.text = localSo.data.myname;
+				}
+				if (localSo.data.othername) {
+					othername.text = localSo.data.othername;
+				}
+				if (localSo.data.servername) {
+					servername.text = localSo.data.servername;
+				}
+			}
+			
+			private function saveTextInput():void {
+				var localSo:SharedObject = SharedObject.getLocal("smooth-curtain");
+				if (this.myname.text) {
+					localSo.data.myname = this.myname.text;
+				}
+				if (this.othername.text) {
+					localSo.data.othername = this.othername.text;
+				}
+				if (this.servername.text) {
+					localSo.data.servername = this.servername.text;
+				}
+				localSo.flush();
+			}
+			
+			//●●MouseEvent2●● 接続開始ボタンを押す
+			private function ready(event:MouseEvent):void{
+				saveTextInput();
+				connect();    //★1
+			}
+			
+			//★1　はじまり
+			public function connect():void {
+				var snd:Sound = new Sound(new URLRequest("app:/assets/SystemOpen.mp3"));
+				snd.play();
+				trace("Connecting...");
+				
+				nc = new NetConnection();
+				nc.addEventListener(AsyncErrorEvent.ASYNC_ERROR, function():void {
+					trace("asyc error");
+					mx.controls.Alert.show("async error");
+				});
+				nc.addEventListener(IOErrorEvent.IO_ERROR, function():void {
+					trace("io error");
+					Alert.show("io error");
+				});
+				nc.addEventListener(NetStatusEvent.NET_STATUS , netStatusHandler);  //★2
+				nc.addEventListener(SecurityErrorEvent.SECURITY_ERROR, function():void {
+					trace("security error");
+					Alert.show("security error");
+				});
+				// サーバーに接続。
+				// サーバーのIPを書き込み、反映させる。
+				// 「スタート」→「コマンドプロンプト」→「ipconfig」
+				nc.connect("rtmp://"+servername.text+"/ChirariCurtain");
+			}
+			//★1　おわり
+			
+			//★2　はじまり
+			private function netStatusHandler(event:NetStatusEvent):void {
+				//trace("connected is: " + nc.connected );
+				//trace("event.info.level: " + event.info.level);
+				//trace("event.info.code: " + event.info.code);
+				
+				switch (event.info.code) {
+					case "NetConnection.Connect.Success":
+						trace("Congratulations! you're connected");
+						//Alert.show("connected");
+						so = SharedObject.getRemote("blur", nc.uri, false);
+						so.connect(nc); 
+						// createPlayList(nc);
+						publishLiveStream();  //★4
+						//　「なめらカーテン起動！」の音を鳴らす
+						var snd:Sound = new Sound(new URLRequest("app:/assets/SystemOpen.mp3"));
+						snd.play();
+						trace("98: SystemOpenSound MP3 END");
+						
+						playButton.enabled = true;
+						break;
+					case "NetConnection.Connect.Failed":
+					case "NetConnection.Connect.Rejected":
+						trace ("Oops! the connection was rejected");
+						EM01.autoLoad = true;  //エラーメッセージ画像表示
+						//　エラーメッセージの音を鳴らす
+						var snd2:Sound = new Sound(new URLRequest("app:/assets/EMsound.mp3"));
+						snd2.play();
+						break;
+				}
+			}
+			//★2　おわり
+			
+			
+			//★3　はじまり
+			private function activityHandler(event:ActivityEvent):void {
+				//trace("106: activityHandler: " + event);
+				//trace("107: activating: " + event.activating);
+			}
+			//★3　おわり
+			
+			
+			//★4　はじまり
+			private function publishLiveStream():void {			
+				ns = new NetStream(nc);
+				//ns.addEventListener(NetStatusEvent.NET_STATUS, netStatusHandler);
+				// ns.client = new CustomClient();
+				
+				//Security.showSettings(SecurityPanel.CAMERA); // 複数カメラの選択
+				camera = Camera.getCamera();
+				camera.setQuality(0,80);
+				//camera.setMode(600,400,20);
+				camera.setMode(640,480,8);
+				camera.setKeyFrameInterval(8);
+				mic = Microphone.getMicrophone();
+				mic.rate = 22;
+				mic.setLoopBack(false);
+				mic.setSilenceLevel(0,0);
+				
+				if (!camera) {
+					Alert("No camera!!");
+					return;
+				}
+				if (camera.muted){
+					Security.showSettings(SecurityPanel.PRIVACY);
+				}
+				camera.addEventListener(ActivityEvent.ACTIVITY, activityHandler);  //★3
+				ns.attachCamera( camera );
+				
+				if (mic != null) {
+					//mic.addEventListener(ActivityEvent.ACTIVITY, activityHandler);  //★3
+					ns.attachAudio( mic );	
+				} else {
+					trace("No mic!!");
+				}
+				if (camera != null || mic != null){
+					// パブリッシュの開始
+					// NetStream.Publish.Start をトリガ
+					ns.publish(myname.text, "live");
+				} else {
+					Alert("Please check your camera and microphone.");
+					EM02.autoLoad = true;  //エラーメッセージ画像表示
+					//　エラーメッセージの音を鳴らす
+					var snd:Sound = new Sound(new URLRequest("app:/assets/EMsound.mp3"));
+					snd.play();
+				}
+			}
+			//★4　おわり
+			
+			
+			//●●MouseEvent3●● 再生開始ボタンを押す
+			private function play(event:MouseEvent):void{
+				connectStream();  //★5
+			}
+			
+			
+			//★5　はじまり
+			// play a recorded stream on the server
+			private function connectStream():void {
+				stream = new NetStream(nc);
+				stream.addEventListener(NetStatusEvent.NET_STATUS, function(event:NetStatusEvent):void{
+					//trace("video stream: " + nc.connected );
+					//trace("video stream level: " + event.info.level);
+					//trace("video stream code: " + event.info.code);
+					
+					switch (event.info.code) {
+						case "NetStream.Play.Stop":
+							trace("video stream: stop");
+							break;
+						case "NetStream.Play.Start":
+							startVideo();  //★6
+							break;
+						case "NetStream.Play.StreamNotFound":
+							trace("video stream: not found");
+							EM03.autoLoad = true;  //エラーメッセージ画像表示
+							//　エラーメッセージの音を鳴らす
+							var snd:Sound = new Sound(new URLRequest("app:/assets/EMsound.mp3"));
+							snd.play();
+							break;
+						case "NetStream.Publish.BadName":
+							trace("video stream: bad name");
+							EM04.autoLoad = true;  //エラーメッセージ画像表示
+							//　エラーメッセージの音を鳴らす
+							var snd2:Sound = new Sound(new URLRequest("app:/assets/EMsound.mp3"));
+							snd2.play();
+							break;
+					}
+					trace(event.info.code);//streamのエラーの種類を調べる
+					// 2/11
+					// 故意に相手側を終了させたときのエラー
+					// 「NetStream.Play.UnpublishNotify」「NetStream.Play.PublishNotify」
+				});
+				video = new Video();
+				stream.soundTransform = new SoundTransform(1);
+				video.attachNetStream(stream);
+				stream.play(othername.text);
+			}
+			//★5　おわり
+			
+			
+			//★6　はじまり
+			private function startVideo():void {
+				container.addChild(video);  //ビデオ再生
+				video.width=600;
+				video.height=450;
+				video.rotation=0;
+				video.x=102;
+				video.y=140;
+				video.deblocking = 1;
+				video.smoothing = false;
+				
+				//setInterval(function():void {
+				//	trace("video width="+ video.videoWidth);
+				//	trace("video height="+ video.videoHeight);
+				//	trace("camera fps="+ camera.fps);
+				//}, 3000);
+				
+				backcover.visible = true;  //キャンバス地表示
+				cover.autoLoad = true;  //カバー表示
+				
+				getMyVolume();
+				
+				//自分の映像を表示
+				myvideo = new Video();
+				myvideo.attachCamera(camera);
+				container2.addChild(myvideo);
+				myvideo.width=160;
+				myvideo.height=120;
+				myvideo.x=330;
+				myvideo.y=10;
+				myvideo.deblocking = 1;
+				myvideo.smoothing = false;
+				
+				so.addEventListener(SyncEvent.SYNC, syncHandler);  //★14
+				connectToServer();  //★7
+			}
+			//★6　おわり
+			
+			
+			//★7　はじまり
+			//　Phidgetsサーバーに接続する
+			private function connectToServer():void {
+				socket = new XMLSocket();
+				socket.addEventListener(Event.CONNECT, function(success:Boolean):void {
+					//_root.status = result;
+					if (success) {
+						trace("Succeed: connection established");
+						//init();
+					} else {
+						trace("Failed: connection error");
+						EM05.autoLoad = true;  //エラーメッセージ画像表示
+						//　エラーメッセージの音を鳴らす
+						var snd:Sound = new Sound(new URLRequest("app:/assets/EMsound.mp3"));
+						snd.play();
+					}
+				});
+				socket.addEventListener(Event.CLOSE, function():void {
+					trace("Close");
+				});
+				socket.addEventListener(DataEvent.DATA, onData);  //★9
+				socket.addEventListener(flash.events.IOErrorEvent.IO_ERROR,function(event:flash.events.IOErrorEvent):void {
+					trace("253: phidget server io error:"+event.text);
+				});
+				try {
+					socket.connect(DEFAULT_HOST, DEFAULT_PORT);
+				} catch(error:Error) {
+					trace(error.message);
+				}	
+			}
+			//★7　おわり
+			
+			
+			//★8　はじまり
+			//　カーテンの開きの差を取る
+			//250(open)--1000(close)
+			private function getCurtainGap():int{
+				return ( (myleftValue - 300) + (myrightValue - 300) ) ; 
+			}
+			//★8　おわり
+			
+			
+			//★9　はじまり
+			//　Phidgetsのデータ
+			private function onData(dataEvent:DataEvent):void {
+				//trace("phidget: onData");
+				var src:String = dataEvent.data;
+				var s:Array = src.split(",");
+				//trace(src);
+				
+				if (s[0] == "Phidgets"
+					&& s[1] == "In"
+					&& s[2] == "InterfaceKit"
+					&& s[4] == "Analog") {
+					
+					var i:int = parseInt(s[6]);
+					if (!isNaN(i)) {
+						if( s[5] == "2"){
+							// 赤外線センサ
+							//センサの値が変化し、カーテンが開いたら、相手のボリューム調節
+							//value(0~1) 0だと音量Min
+							//sendIR( i/470 );  //★11
+							if(i > 200)
+							{
+								sendIR(1);
+							}
+							else{
+								sendIR(0);	
+							}
+							//trace("312: InfraredRay = " + i);
+						}
+						
+						if( s[5] == "3"){
+							//振動センサ
+							myShock = i;
+						}
+							
+						else{
+							// スライダセンサ
+							if (s[5] == "0"){
+								myleftValue = i; //カーテン左
+								//trace("318: MyLeftValue = " + myleftValue);
+							}
+							else if (s[5] == "1"){
+								myrightValue = i;  //カーテン右
+								//trace("322: MyRightValue = " + myrightValue);
+							}
+							
+							var x:Number = getCurtainGap() / 1500 ;  //★8
+							//var x:Number = (getCurtainGap() - 750) * 2 / 1500 ;  //★8
+							//trace("327:  x (CurtainGap) = " + x);
+							
+							sendBlur( x*x );  //★10
+							//trace("315: x*x = " + (x*x));
+							setBlur(myvideo, x*x );  //自分の映像もぼかす
+							writeLog(this.myname.text, x, x*x);
+						}
+						//音量調節
+						changeVolume();  //★15
+						
+						//自分のカーテンが開いたら、音を鳴らす
+						myOpenSound();  //★16
+						
+						//自分のカーテン端末をノックしたら、音を鳴らす
+						//		myOpenSound2();
+						
+					}
+				}
+			}
+			//★9　おわり
+			
+			private function writeLog(name:String, sliderValue:Number, blurValue:Number):void {
+				var now:Date = new Date();
+				var str:String = [
+					'"' + name + '"',
+					sliderValue,
+					blurValue,
+					now.getTime(),
+					'"' + now.toString() + '"',
+				].join(",");
+				this.logFileStream.writeUTFBytes(str + "\r\n");
+			}
+			
+			//自分の音量を取得し、表示する。0（検知されてない）～100（非常に大音量）。
+			private function getMyVolume():void{
+				var volume:Number = mic.activityLevel;
+				//trace("Volume : " + volume);
+				
+				sendVolume( volume );
+				
+				ActivityLevelGaugeBackground01.visible = true; //ボリューム変化（左・背景）表示
+				ActivityLevelGaugeBackground02.visible = true; //ボリューム変化（右・背景）表示
+				
+				OtherVolume.visible = true; //相手の「VOL」表示
+				MyVolume.visible = true; //自分の「VOL」表示
+				
+				activityLevelGauge01.visible = true; //ボリューム変化（左）表示
+				activityLevelGauge01.height = 0 - volume;
+				
+				getDay();   //日付表示
+				
+				setTimeout(getMyVolume,500);  //1秒＝1000
+			}
+			
+			
+			//★10　はじまり
+			//　サーバーにぼかしの数値を送る
+			private function sendBlur(value:Number):void {
+				so.setProperty(myname.text, value);
+			}
+			//★10　おわり
+			
+			
+			//★11　はじまり
+			//　サーバーに赤外線センサの値を送る
+			private function sendIR(value:Number):void{
+				so.setProperty(myname.text + "IR", value);
+				//trace("357: myIRValue(sendIR) = " + (myname.text + "IR", value));
+			}
+			//★11　おわり
+			
+			
+			//サーバーに音量の値（0～100）を送る
+			private function sendVolume(value:Number):void{
+				so.setProperty(myname.text + "Volume", value);
+			}
+			
+			
+			//サーバーに振動センサの値を送る
+			private function sendShock(value:Number):void{
+				so.setProperty(myname.text + "Shock", value);
+			}
+			
+			
+			//★12　はじまり
+			private function onReply(result:Object):void {
+				//trace("onReply received value: " + result);
+			}
+			//★12　おわり
+			
+			
+			//★13　はじまり
+			//　Phidgetsの値で画像にフィルタをかける
+			//　value (0~1)  0だとぼかし無し
+			private function setBlur(vid:Video, value:Number = 0):void {
+				var blurValue:int = 255 * value;
+				//trace(blurValue);
+				var blur:BlurFilter = new BlurFilter();
+				
+				blur.blurX = blurValue;
+				blur.blurY = blurValue;
+				blur.quality = BitmapFilterQuality.MEDIUM;
+				vid.filters = [blur];
+				
+			}
+			//★13　おわり
+			
+			
+			//★14　はじまり
+			//　update clients when the shared object changes
+			private function syncHandler(event:SyncEvent):void {
+				// when a sync event is fired
+				// update the position of the ball in clients
+				
+				//trace(so.data[othername.text]);
+				try{
+					if(!isNaN(so.data[othername.text])){
+						anotherCurtainGap = parseFloat(so.data[othername.text]);
+						//trace("othername CartainGap: " + (anotherCurtainGap));
+						setBlur(video, anotherCurtainGap);
+						writeLog(this.othername.text, Math.sqrt(anotherCurtainGap), anotherCurtainGap);
+					}
+				} catch(error:Error){
+					trace("SyncEventでエラー");
+				}
+				
+				try{
+					if(!isNaN(so.data[othername.text + "IR"])){
+						anotherIRValue = parseFloat(so.data[othername.text + "IR"]);
+						//trace("400: anotherIRValue(so.data) = " + (so.data[othername.text + "IR"]));
+						trace("402: anotherIRValue = " + (anotherIRValue));
+					}
+				} catch(error:Error){
+					trace("相手のIRエラー");
+				}
+				
+				try{
+					if(!isNaN(so.data[othername.text + "Volume"])){
+						anotherVolume = parseFloat(so.data[othername.text + "Volume"]);
+						trace("402: anotherVolume = " + (anotherVolume));
+						
+						activityLevelGauge02.visible = true; //ボリューム変化（右）表示
+						activityLevelGauge02.height = 2 * (0 - anotherVolume);
+					}
+				} catch(error:Error){
+					trace("相手のボリュームエラー");
+				}
+				
+				
+				//自分のカーテンギャップと相手のカーテンギャップを保存、比較、音量の制御
+				try{
+					changeVolume();
+				} catch(error:Error){
+					trace("changeVolumeでエラー");
+				}
+				
+				//相手のカーテンが開いたら、音を鳴らす
+				try{
+					anotherOpenSound();  //★17
+					//anotherOpenSound2();
+				} catch(error:Error){
+					trace("anotherOpenSoundでエラー");
+				}
+			}
+			//★14　おわり
+			
+			
+			//★15　はじまり
+			private function changeVolume():void{
+				if(!stream){
+					trace("507: No Stream!!");
+					EM06.autoLoad = true;  //エラーメッセージ画像表示
+					//　エラーメッセージの音を鳴らす
+					var snd:Sound = new Sound(new URLRequest("app:/assets/EMsound2.mp3"));
+					snd.play();
+					
+					//ページをリロードする
+					
+					return;
+					//ストリームがなければ、関数から抜ける
+				}
+				
+				var myCurtainGap:Number = getCurtainGap();
+				var bothOpen:Boolean = (myCurtainGap < 800 && anotherCurtainGap < 0.5);
+				
+				//カーテンの開き具合の小さい方に合わせて、ボリュームが変化する
+				//相手側のカーテンが開いていて、赤外線センサ値が上がったとき、自分側のボリュームが変化する
+				
+				if (bothOpen || (anotherIRValue == 1  && anotherCurtainGap < 0.5)) {
+					//聞こえる
+					//stream.soundTransform.volume = Math.min(anotherCurtainGap, myCurtainGap);  //小さい値を返す
+					//stream.soundTransform.volume = 1 - ( Math.max(anotherCurtainGap,myCurtainGap) / 1400) ;
+					
+					var sound:Number = 1 - ( Math.max(anotherCurtainGap,myCurtainGap) / 1400);
+					stream.soundTransform = new SoundTransform( sound*sound );
+					trace("433: Volume...!!!");
+					//trace("433: Max is ..." + Math.max(anotherCurtainGap,myCurtainGap));
+					//カーテン閉じる：Gap小、開ける：Gap大！！
+				} else {
+					//カーテンが開いたら、音を鳴らす
+					//openSound();
+					
+					//聞こえない
+					stream.soundTransform = new SoundTransform( 0 );
+					trace("442: Volume...???");
+				}
+				trace("444: bothopen = " + bothOpen );
+				trace("445: myCurtainGap = " + myCurtainGap);
+				trace("446: anotherCurtainGap = " + anotherCurtainGap);
+			}
+			//★15　おわり
+			
+			
+			//★16　はじまり　
+			//カーテンが開いたら、音が鳴る。
+			private function myOpenSound2():void{
+				var myGap:Number = getCurtainGap();
+				//var setSound:Boolean = (myGap < 400 || anotherGap > 0.9);  	//変数
+				
+				//trace("458: myOpenSound IN! myClosed:" + myClosed + ", myGap:" + myGap);
+				//変数の状態によって、音を鳴らす・鳴らさないを変える
+				if (myClosed && myGap < 400){
+					//閉まった状態から、開くとき
+					
+					var now:Date = new Date();
+					if(now.getTime() - mypasttime.getTime() < 3000){
+						var snd:Sound = new Sound(new URLRequest("app:/assets/openSound4.mp3"));
+						snd.play();
+						//trace("488: anotherOpenSound MP3 END");
+					}
+					mypasttime = new Date();
+					myClosed = false;
+				}
+				if (myClosed==false && myGap >= 200){
+					//開いた状態から、閉じるとき
+					myClosed = true;
+				}
+			}
+			//★16　おわり
+			
+			
+			//カーテンが開いた状態で振動センサの値が変化したら、音が鳴る
+			private function myOpenSound():void{
+				var myGap:Number = getCurtainGap();
+				
+				//変数の状態によって、音を鳴らす・鳴らさないを変える
+				
+				if (myClosed && myGap < 400){
+					//閉まった状態から、開くとき
+					
+					if (myShock >= 500){
+						
+						trace("Shock !!!");
+						var snd:Sound = new Sound(new URLRequest("app:/assets/openSound4.mp3"));
+						snd.play();
+						
+						myClosed = false;
+					}
+					
+				}
+				if (myClosed==false && myGap >= 400){
+					//開いた状態から、閉じるとき
+					myClosed = true;
+				}
+			}
+			
+			
+			//★17　はじまり　
+			//相手のカーテンが開いたら、音が鳴る
+			private function anotherOpenSound():void{
+				var anotherGap:Number = anotherCurtainGap;
+				//var setSound:Boolean = (myGap < 400 || anotherGap > 0.9);  	//変数
+				
+				//trace("458: anotherOpenSound IN!");
+				//変数の状態によって、音を鳴らす・鳴らさないを変える
+				if (anotherClosed && anotherGap < 0.02){
+					//閉まった状態から、開くとき
+					
+					var now:Date = new Date();
+					if(now.getTime() - pasttime.getTime() < 3000){
+						var snd:Sound = new Sound(new URLRequest("app:/assets/openSound4.mp3"));
+						snd.play();
+						//trace("488: anotherOpenSound MP3 END");
+					}
+					pasttime = new Date();
+					anotherClosed = false;
+					
+				}
+				if (anotherClosed==false && anotherGap >= 0.02){
+					//開いた状態から、閉じるとき
+					anotherClosed = true;
+				}
+			}
+			//★17　おわり
+			
+			
+			//相手のカーテンが開いた状態で振動センサの値が変化したら、音が鳴る
+			private function anotherOpenSound2():void{
+				var anotherGap:Number = anotherCurtainGap;
+				
+				//変数の状態によって、音を鳴らす・鳴らさないを変える
+				if (anotherClosed && anotherGap < 0.02){
+					//閉まった状態から、開くとき
+					
+					if (anotherShock >= 500){
+						var snd:Sound = new Sound(new URLRequest("app:/assets/openSound4.mp3"));
+						snd.play();
+						
+						anotherClosed = false;
+					}
+					
+				}
+				if (anotherClosed==false && anotherGap >= 0.02){
+					//開いた状態から、閉じるとき
+					anotherClosed = true;
+				}
+			}
+			
+			//日付を取得・表示する
+			private function getDay():void{
+				var monthLabels:Array = new Array(
+					"January",
+					"February",
+					"March",
+					"April",
+					"May",
+					"June",
+					"July",
+					"August",
+					"September",
+					"October",
+					"November",
+					"December");
+				
+				var now:Date = new Date();
+				//trace(monthLabels[now.getMonth()]);
+				//trace("539: Month " + now.getMonth());  0:1月～11:12月
+				//trace("540: Date " + now.getDate()); 
+				month.text = monthLabels[now.getMonth()];
+				day.text = now.getDate().toString();
+				
+				
+				//月ごとに、背景を変える
+				var TodayMonth:int = now.getMonth();
+				if ( TodayMonth == 0)	month01.autoLoad = true;
+				if ( TodayMonth == 1)	month02.autoLoad = true;
+				if ( TodayMonth == 2)	month03.autoLoad = true;
+				if ( TodayMonth == 3)	month04.autoLoad = true;
+				if ( TodayMonth == 4)	month05.autoLoad = true;
+				if ( TodayMonth == 5)	month06.autoLoad = true;
+				if ( TodayMonth == 6)	month07.autoLoad = true;
+				if ( TodayMonth == 7)	month08.autoLoad = true;
+				if ( TodayMonth == 8)	month09.autoLoad = true;
+				if ( TodayMonth == 9)	month10.autoLoad = true;
+				if ( TodayMonth == 10)	month11.autoLoad = true;
+				if ( TodayMonth == 11)	month12.autoLoad = true;
+			}
+		]]>
+	</fx:Script>
+	
+	<mx:Image source="@Embed(source='assets/BaseBackGround.gif')" />
+	<mx:Label x="267.95" y="49.95" text="Smooth Curtain" fontSize="33" width="283.18182" height="37.954544" color="#FFFFFF"/>
+	
+	<mx:Label text="1. Please check your name." fontSize="17" color="#E52828" left="226.15" y="153.3" width="281" fontWeight="bold"/>
+	<mx:Label x="264" y="186" text="My name" fontSize="17" width="107"/>
+	<mx:TextInput x="413" y="186" id="myname"  fontSize="17"/>
+	<mx:Label x="264" y="220" text="Other name" fontSize="17" width="115"/>
+	<mx:TextInput x="413" y="219" id="othername" fontSize="17"/>
+	
+	<mx:Label x="222" y="272" text="2. Please write Server Name!" fontSize="17" color="#E52828" width="293" fontWeight="bold"/>
+	<mx:TextInput id="servername" x="264" y="305" fontSize="17"/>
+	
+	<mx:Label x="224" y="373" text="3. Are you ready?" fontSize="17" color="#E52828" width="208" fontWeight="bold"/>
+	<mx:Button x="449" y="372" label="OK!" enabled="true" id="readyButton" click="ready(event)" fontSize="17"/>
+	
+	<mx:Label x="224" y="443" text="4. Start?" height="28.030304" fontSize="17" color="#E52828" fontWeight="bold" width="114.77273"/>
+	<mx:Button click="play(event)" x="449" y="443" label="Play!" labelPlacement="left" id="playButton" enabled="false" fontSize="29" />
+	
+	<mx:Image id="EM01" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege01.png')" autoLoad="false"/>
+	<mx:Image id="EM02" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege02.png')" autoLoad="false"/>
+	<mx:Image id="EM03" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege03.png')" autoLoad="false"/>
+	<mx:Image id="EM04" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege04.png')" autoLoad="false"/>
+	<mx:Image id="EM05" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege05.png')" autoLoad="false"/>
+	<mx:Image id="EM06" x="179.5" y="159.3" source="@Embed(source='assets/ErrorMessege06.png')" autoLoad="false"/>
+	
+	<mx:Canvas id="backcover" left="0" right="0" top="0" bottom="0" visible="false" backgroundColor="#ffffff"/>
+	
+	<mx:UIComponent id="container" />
+	
+	<mx:Image id="cover" x="0" y="0" source="@Embed(source='assets/BaseBackGround.gif')" autoLoad="false"/>
+	<mx:Image id="month01" x="0" y="0" source="@Embed(source='assets/month01.gif')" autoLoad="false"/>
+	<mx:Image id="month02" x="0" y="0" source="@Embed(source='assets/month02.gif')" autoLoad="false"/>
+	<mx:Image id="month03" x="0" y="0" source="@Embed(source='assets/month03.gif')" autoLoad="false"/>
+	<mx:Image id="month04" x="0" y="0" source="@Embed(source='assets/month04.gif')" autoLoad="false"/>
+	<mx:Image id="month05" x="0" y="0" source="@Embed(source='assets/month05.gif')" autoLoad="false"/>
+	<mx:Image id="month06" x="0" y="0" source="@Embed(source='assets/month06.gif')" autoLoad="false"/>
+	<mx:Image id="month07" x="0" y="0" source="@Embed(source='assets/month07.gif')" autoLoad="false"/>
+	<mx:Image id="month08" x="0" y="0" source="@Embed(source='assets/month08.gif')" autoLoad="false"/>
+	<mx:Image id="month09" x="0" y="0" source="@Embed(source='assets/month09.gif')" autoLoad="false"/>
+	<mx:Image id="month10" x="0" y="0" source="@Embed(source='assets/month10.gif')" autoLoad="false"/>
+	<mx:Image id="month11" x="0" y="0" source="@Embed(source='assets/month11.gif')" autoLoad="false"/>
+	<mx:Image id="month12" x="0" y="0" source="@Embed(source='assets/month12.gif')" autoLoad="false"/>
+	
+	<mx:UIComponent id="container2"/>
+	
+	<mx:Button width="30" height="110" x="497" y="9" id="ActivityLevelGaugeBackground01" visible="false" />
+	<mx:Label x="496" y="116" text="VOL" fontSize="15" color="#FFFFFF" id="OtherVolume" visible="false"/>
+	<ns1:ActivityLevelGauge x="502" y="111.95" id="activityLevelGauge01" visible="false">
+	</ns1:ActivityLevelGauge>
+	<mx:Button width="30" height="220" x="710.95" y="346.3" id="ActivityLevelGaugeBackground02" visible="false" />
+	<mx:Label x="706" y="562" text="VOL" fontSize="20" id="MyVolume" visible="false"/>
+	<ns1:ActivityLevelGauge x="715.95" y="558" id="activityLevelGauge02" visible="false">
+	</ns1:ActivityLevelGauge>
+	
+	<mx:Text x="208.15" y="55" id="month" color="#FFFFFF" fontSize="16" fontWeight="bold" width="115.75" height="49.9" textAlign="right"/>
+	<mx:Text x="251.95" y="74.3" id="day" color="#FFFFFF" fontSize="40" fontWeight="normal"/>
+	
+	<mx:LinkButton x="616" y="102.3" label="HELP!" fontSize="20" fontWeight="bold" cornerRadius="9">
+		<mx:click>navigateToURL(new URLRequest('../CurtainHelp/index.html'))</mx:click>
+	</mx:LinkButton>
+	
+	
+</s:WindowedApplication>
