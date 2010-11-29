@@ -364,6 +364,7 @@
 			//★8　おわり
 			
 			
+			private var prevMyCurtainGap:Number = -1;
 			//★9　はじまり
 			//　Phidgetsのデータ
 			private function onData(dataEvent:DataEvent):void {
@@ -417,7 +418,11 @@
 							sendBlur( x*x );  //★10
 							//trace("315: x*x = " + (x*x));
 							setBlur(myvideo, x*x );  //自分の映像もぼかす
-							writeLog(this.myname.text, x, x*x);
+							
+							if (prevMyCurtainGap != x) {
+								writeLog(this.myname.text, x, x*x);
+							}
+							prevMyCurtainGap = x;
 						}
 						//音量調節
 						changeVolume();  //★15
@@ -532,7 +537,7 @@
 					if(!isNaN(so.data[othername.text])){
 						anotherCurtainGap = parseFloat(so.data[othername.text]);
 						//trace("othername CartainGap: " + (anotherCurtainGap));
-						if (prevAnotherCurtainGap != anotherCurtainGap) {
+						if (prevAnotherCurtainGap != anotherCurtainGap && prevAnotherCurtainGap > 0) {
 							setBlur(video, anotherCurtainGap);
 							writeLog(this.othername.text, Math.sqrt(anotherCurtainGap), anotherCurtainGap);
 						}
