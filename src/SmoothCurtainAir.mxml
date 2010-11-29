@@ -417,7 +417,7 @@
 							sendBlur( x*x );  //★10
 							//trace("315: x*x = " + (x*x));
 							setBlur(myvideo, x*x );  //自分の映像もぼかす
-							writeLog(this.myname.text, x, x*x);
+							writeLog(this.myname.text + "-onData", x, x*x);
 						}
 						//音量調節
 						changeVolume();  //★15
@@ -532,7 +532,7 @@
 						anotherCurtainGap = parseFloat(so.data[othername.text]);
 						//trace("othername CartainGap: " + (anotherCurtainGap));
 						setBlur(video, anotherCurtainGap);
-						writeLog(this.othername.text, Math.sqrt(anotherCurtainGap), anotherCurtainGap);
+						writeLog(this.othername.text + "-syncHandler", Math.sqrt(anotherCurtainGap), anotherCurtainGap);
 					}
 				} catch(error:Error){
 					trace("SyncEventでエラー");
